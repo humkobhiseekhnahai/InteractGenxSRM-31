@@ -1,13 +1,19 @@
-// src/routes/graph.routes.ts
 import { Router } from "express";
 import prisma from "../utils/prisma.js";
 
 const graphRouter = Router();
 
 /* ----------------------------------------------------
-   Helper: Build concept graph with blogs + related concepts
+   Helper: Build concept drilldown graph
 ---------------------------------------------------- */
-function buildConceptGraph(concept: any, blogs: any[], relatedConcepts: any[]) {
+function buildConceptGraph(
+  concept: {
+    id: string;
+    name: string;
+  },
+  blogs: { id: string; title: string }[],
+  relatedConcepts: { id: string; name: string }[]
+) {
   const nodes = [
     {
       id: concept.id,
@@ -26,30 +32,38 @@ function buildConceptGraph(concept: any, blogs: any[], relatedConcepts: any[]) {
     })),
   ];
 
-  const links: any[] = [];
+  const links: { source: string; target: string }[] = [];
 
   // Concept → Blogs
   for (const b of blogs) {
-    links.push({ source: concept.id, target: b.id });
+    links.push({
+      source: concept.id,
+      target: b.id,
+    });
   }
 
   // Concept → Related Concepts
   for (const rc of relatedConcepts) {
-    links.push({ source: concept.id, target: rc.id });
+    links.push({
+      source: concept.id,
+      target: rc.id,
+    });
   }
 
   return { nodes, links };
 }
 
 /* ----------------------------------------------------
-   1) ROOT GRAPH — GET /graph
+   1️⃣ ROOT GRAPH — GET /graph
+   Concepts only (clean semantic map)
 ---------------------------------------------------- */
 graphRouter.get("/", async (req, res) => {
   const conceptId = req.query.id as string | undefined;
 
-  /* ---------------------------------------------
-     CASE A — Drilldown: /graph?id=<conceptId>
-  --------------------------------------------- */
+  /* ------------------------------------------------
+     CASE A — Concept Drilldown
+     /graph?id=<conceptId>
+  ------------------------------------------------ */
   if (conceptId) {
     try {
       const concept = await prisma.concept.findUnique({
@@ -62,94 +76,100 @@ graphRouter.get("/", async (req, res) => {
 
       const blogs = await prisma.blogPost.findMany({
         where: { id: { in: concept.blogPostIds } },
+        select: { id: true, title: true },
       });
 
       const relatedConcepts = await prisma.concept.findMany({
         where: { id: { in: concept.relatedIds } },
+        select: { id: true, name: true },
       });
 
       const graph = buildConceptGraph(concept, blogs, relatedConcepts);
       return res.json(graph);
     } catch (err) {
       console.error("Concept graph error:", err);
-      return res.status(500).json({ error: "Failed to load concept graph" });
+      return res
+        .status(500)
+        .json({ error: "Failed to load concept graph" });
     }
   }
 
-  /* ---------------------------------------------
-     CASE B — ROOT GRAPH: /graph
-     Shows entire knowledge graph minimally
-  --------------------------------------------- */
+  /* ------------------------------------------------
+     CASE B — ROOT GRAPH
+     Concepts only (NO blogs here)
+  ------------------------------------------------ */
   try {
-    const concepts = await prisma.concept.findMany();
-    const blogs = await prisma.blogPost.findMany();
+    const concepts = await prisma.concept.findMany({
+      select: {
+        id: true,
+        name: true,
+        relatedIds: true,
+      },
+    });
 
-    const nodes = [
-      ...concepts.map((c) => ({
-        id: c.id,
-        title: c.name,
-        type: "concept",
-      })),
-      ...blogs.map((b) => ({
-        id: b.id,
-        title: b.title,
-        type: "blog",
-      })),
-    ];
+    const nodes = concepts.map((c) => ({
+      id: c.id,
+      title: c.name,
+      type: "concept",
+    }));
 
-    const links: any[] = [];
+    const links: { source: string; target: string }[] = [];
 
-    // Concept → Blog edges
-    for (const c of concepts) {
-      for (const bid of c.blogPostIds) {
-        links.push({ source: c.id, target: bid });
-      }
-    }
-
-    // Concept → Concept edges
+    // Concept ↔ Concept relations
     for (const c of concepts) {
       for (const rid of c.relatedIds) {
-        links.push({ source: c.id, target: rid });
-      }
-    }
-
-    // Blog → Blog edges
-    for (const b of blogs) {
-      for (const rid of b.relatedIds) {
-        links.push({ source: b.id, target: rid });
+        links.push({
+          source: c.id,
+          target: rid,
+        });
       }
     }
 
     return res.json({ nodes, links });
   } catch (err) {
     console.error("Root graph error:", err);
-    return res.status(500).json({ error: "Failed to load root graph" });
+    return res
+      .status(500)
+      .json({ error: "Failed to load root graph" });
   }
 });
 
 /* ----------------------------------------------------
-   2) BLOG EXPANSION — GET /graph/expand?id=<blogId>
-   Used inside Blog Modal for related blogs
+   2️⃣ BLOG EXPANSION — GET /graph/expand?id=<blogId>
+   Used inside BlogModal
 ---------------------------------------------------- */
 graphRouter.get("/expand", async (req, res) => {
-  const id = req.query.id as string;
+  const id = req.query.id as string | undefined;
 
   if (!id) {
     return res.status(400).json({ error: "Missing id parameter" });
   }
 
   try {
-    const blog = await prisma.blogPost.findUnique({ where: { id } });
+    const blog = await prisma.blogPost.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        title: true,
+        relatedIds: true,
+      },
+    });
+
     if (!blog) {
       return res.status(404).json({ error: "Blog not found" });
     }
 
     const relatedBlogs = await prisma.blogPost.findMany({
       where: { id: { in: blog.relatedIds } },
+      select: { id: true, title: true },
     });
 
     const nodes = [
-      { id: blog.id, title: blog.title, type: "blog" },
+      {
+        id: blog.id,
+        title: blog.title,
+        type: "blog",
+      },
       ...relatedBlogs.map((b) => ({
         id: b.id,
         title: b.title,
@@ -165,7 +185,9 @@ graphRouter.get("/expand", async (req, res) => {
     return res.json({ nodes, links });
   } catch (err) {
     console.error("Expand graph error:", err);
-    return res.status(500).json({ error: "Failed to load expanded graph" });
+    return res
+      .status(500)
+      .json({ error: "Failed to load expanded graph" });
   }
 });
 

@@ -1,375 +1,344 @@
-// src/components/GraphView.tsx
+"use client"
 
-import ForceGraph2D from "react-force-graph-2d";
-import type {
-    ForceGraphMethods,
-    NodeObject,
-    LinkObject,
-} from "react-force-graph-2d";
+import ForceGraph2D from "react-force-graph-2d"
+import type { ForceGraphMethods, NodeObject, LinkObject } from "react-force-graph-2d"
 
-import { useRef, useEffect, useState } from "react";
-import { forceX, forceY, forceRadial } from "d3-force";
+import { useRef, useEffect, useState } from "react"
+import { forceX, forceY, forceRadial } from "d3-force"
 
-import { useGraphStore } from "../state/graphStore";
-import type { GraphNode, GraphData } from "../types/graph";
-import { useUIStore } from "../state/uiStore";
-import { fetchConceptGraph } from "../api/graph";
+import { useGraphStore } from "../state/graphStore"
+import type { GraphNode, GraphData } from "../types/graph"
+import { useUIStore } from "../state/uiStore"
+import { fetchConceptGraph } from "../api/graph"
 
 interface GraphLink {
-    source: string;
-    target: string;
+  source: string
+  target: string
 }
 
 export default function GraphView() {
-    const fgRef = useRef<
-        ForceGraphMethods<NodeObject<GraphNode>, LinkObject<GraphNode, GraphLink>>
-    >(null!);
+  const fgRef = useRef<ForceGraphMethods<NodeObject<GraphNode>, LinkObject<GraphNode, GraphLink>>>(null!)
 
-    const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
-    const [isDragging, setIsDragging] = useState(false);
-    const [zoomTransition, setZoomTransition] = useState(false);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const [zoomTransition, setZoomTransition] = useState(false)
+  const [animationTime, setAnimationTime] = useState(0)
 
-    const {
-        graphData,
-        selectedNodeId,
-        highlightNodeId,
-        pendingFocusId,  // ← NEW: from store for delayed focus after graph load
-        setSelectedNode,
-        setHighlightNode,
-        pushGraphHistory,
-        setGraphData,
-    } = useGraphStore();
+  const {
+    graphData,
+    selectedNodeId,
+    highlightNodeId,
+    pendingFocusId,
+    setSelectedNode,
+    setHighlightNode,
+    pushGraphHistory,
+    setGraphData,
+  } = useGraphStore()
 
-    const openBlogModal = useUIStore((s) => s.openBlogModal);
+  const openBlogModal = useUIStore((s) => s.openBlogModal)
 
-    /* --------------------------------------------------------
-       SEMANTIC FORCE LAYOUT
-    -------------------------------------------------------- */
-    useEffect(() => {
-        if (!fgRef.current || !graphData) return;
+  useEffect(() => {
+    let animationId: number
+    const animate = () => {
+      setAnimationTime(Date.now() * 0.001)
+      animationId = requestAnimationFrame(animate)
+    }
+    animationId = requestAnimationFrame(animate)
+    return () => cancelAnimationFrame(animationId)
+  }, [])
 
-        fgRef.current.d3Force(
-            "concept-x",
-            forceX<NodeObject<GraphNode>>(0).strength((n) => (n.type === "concept" ? 0.4 : 0))
-        );
+  useEffect(() => {
+    if (!fgRef.current || !graphData) return
 
-        fgRef.current.d3Force(
-            "concept-y",
-            forceY<NodeObject<GraphNode>>(0).strength((n) => (n.type === "concept" ? 0.4 : 0))
-        );
+    fgRef.current.d3Force(
+      "concept-x",
+      forceX<NodeObject<GraphNode>>(0).strength((n) => (n.type === "concept" ? 0.4 : 0)),
+    )
 
-        fgRef.current.d3Force(
-            "blog-orbit",
-            forceRadial<NodeObject<GraphNode>>(320, 0, 0).strength((n) =>
-                n.type === "blog" ? 0.95 : 0
-            )
-        );
+    fgRef.current.d3Force(
+      "concept-y",
+      forceY<NodeObject<GraphNode>>(0).strength((n) => (n.type === "concept" ? 0.4 : 0)),
+    )
 
-        fgRef.current.d3Force("charge")?.strength(-2000);
+    fgRef.current.d3Force(
+      "blog-orbit",
+      forceRadial<NodeObject<GraphNode>>(320, 0, 0).strength((n) => (n.type === "blog" ? 0.95 : 0)),
+    )
 
-        fgRef.current.d3Force("link")?.distance((link: LinkObject<NodeObject<GraphNode>, GraphLink>) => {
-            const sourceNode = link.source as NodeObject<GraphNode>;
-            return sourceNode.type === "concept" ? 180 : 130;
-        });
-    }, [graphData]);
+    fgRef.current.d3Force("charge")?.strength(-2000)
 
-    /* --------------------------------------------------------
-       IMMEDIATE Zoom + highlight on selection (for nodes already in graph)
-    -------------------------------------------------------- */
-    useEffect(() => {
-        if (!graphData || !selectedNodeId || !fgRef.current) return;
+    fgRef.current.d3Force("link")?.distance((link: LinkObject<NodeObject<GraphNode>, GraphLink>) => {
+      const sourceNode = link.source as NodeObject<GraphNode>
+      return sourceNode.type === "concept" ? 180 : 130
+    })
+  }, [graphData])
 
-        const node = graphData.nodes.find((n) => n.id === selectedNodeId);
-        if (!node?.x || !node?.y) return;
+  useEffect(() => {
+    if (!graphData || !selectedNodeId || !fgRef.current) return
 
-        setZoomTransition(true);
-        
-        fgRef.current.centerAt(node.x, node.y, 1000);
-        fgRef.current.zoom(2.2, 1000);
+    const node = graphData.nodes.find((n) => n.id === selectedNodeId)
+    if (!node?.x || !node?.y) return
 
-        setHighlightNode(node.id);
-        
-        setTimeout(() => setZoomTransition(false), 1000);
-        
-        const t = setTimeout(() => setHighlightNode(null), 2000);
-        return () => clearTimeout(t);
-    }, [selectedNodeId, graphData.nodes, setHighlightNode]);
+    setZoomTransition(true)
 
-    if (!graphData) return null;
+    // Gentler centering with reduced zoom
+    fgRef.current.centerAt(node.x, node.y, 800)
+    fgRef.current.zoom(1.6, 800)
 
-    return (
-        <ForceGraph2D<GraphNode, GraphLink>
-            ref={fgRef}
-            graphData={graphData}
-            nodeId="id"
-            nodeLabel="title"
-            linkSource="source"
-            linkTarget="target"
-            minZoom={0.2}
-            maxZoom={8}
-            cooldownTicks={180}
-            d3VelocityDecay={0.35}
-            backgroundColor="#000000"
-            nodeRelSize={10}
-            linkWidth={3}
-            linkDirectionalParticles={4}
-            linkDirectionalParticleSpeed={0.008}
-            linkDirectionalParticleWidth={3.5}
-            linkCurvature={0.3}
-            enableNodeDrag={true}
-            onNodeDragStart={() => setIsDragging(true)}
-            onNodeDragEnd={() => setIsDragging(false)}
+    setHighlightNode(node.id)
 
-            /* --------------------------------------------------------
-               NEW: Handle delayed focus after graph load/simulation settles
-            -------------------------------------------------------- */
-            onEngineStop={() => {
-                if (!pendingFocusId) return;
+    setTimeout(() => setZoomTransition(false), 800)
 
-                const node = graphData.nodes.find((n) => n.id === pendingFocusId);
-                if (!node || !node.x || !node.y) return;
+    const t = setTimeout(() => setHighlightNode(null), 1500)
+    return () => clearTimeout(t)
+  }, [selectedNodeId, graphData, setHighlightNode])
 
-                // Zoom to focused node once positions are settled
-                fgRef.current.centerAt(node.x, node.y, 1000);
-                fgRef.current.zoom(2.2, 1000);
+  if (!graphData) return null
 
-                setSelectedNode(pendingFocusId);
-                setHighlightNode(pendingFocusId);
-                setZoomTransition(true);
+  return (
+    <ForceGraph2D<GraphNode, GraphLink>
+      ref={fgRef}
+      graphData={graphData}
+      nodeId="id"
+      nodeLabel="title"
+      linkSource="source"
+      linkTarget="target"
+      minZoom={0.2}
+      maxZoom={8}
+      cooldownTicks={180}
+      d3VelocityDecay={0.35}
+      backgroundColor="transparent"
+      nodeRelSize={10}
+      linkWidth={2}
+      linkDirectionalParticles={2}
+      linkDirectionalParticleSpeed={0.004}
+      linkDirectionalParticleWidth={2}
+      linkCurvature={0.15}
+      enableNodeDrag={true}
+      onNodeDragStart={() => setIsDragging(true)}
+      onNodeDragEnd={() => setIsDragging(false)}
+      onEngineStop={() => {
+        if (!pendingFocusId) return
 
-                setTimeout(() => {
-                    setHighlightNode(null);
-                    setZoomTransition(false);
-                }, 2000);
+        const node = graphData.nodes.find((n) => n.id === pendingFocusId)
+        if (!node || !node.x || !node.y) return
 
-                // Clear pending
-                useGraphStore.setState({ pendingFocusId: null });
-            }}
+        fgRef.current.centerAt(node.x, node.y, 800)
+        fgRef.current.zoom(1.6, 800)
 
-            nodeCanvasObject={(node, ctx, globalScale) => {
-                if (node.x == null || node.y == null) return;
-                
-                const gnode = node as GraphNode;
-                const label = gnode.title ?? "";
-                const fontSize = Math.max(15 / globalScale, 10);
-                
-                const isSelected = gnode.id === selectedNodeId;
-                const isHighlighted = gnode.id === highlightNodeId;
-                const isHovered = gnode.id === hoveredNodeId;
-                const isConcept = gnode.type === "concept";
-                
-                const baseRadius = 11;
-                const hoverScale = isHovered ? 1.15 : 1;
-                const selectScale = isSelected ? 1.25 : 1;
-                const finalRadius = baseRadius * hoverScale * selectScale;
+        setSelectedNode(pendingFocusId)
+        setHighlightNode(pendingFocusId)
+        setZoomTransition(true)
 
-                // Diving animation - expanding circle effect
-                if (isHighlighted && zoomTransition) {
-                    const pulseRadius = finalRadius + 40;
-                    ctx.beginPath();
-                    ctx.arc(node.x, node.y, pulseRadius, 0, Math.PI * 2);
-                    const expandGradient = ctx.createRadialGradient(
-                        node.x, node.y, 0,
-                        node.x, node.y, pulseRadius
-                    );
-                    expandGradient.addColorStop(0, isConcept ? "rgba(255, 215, 0, 0.4)" : "rgba(255, 107, 107, 0.4)");
-                    expandGradient.addColorStop(0.6, isConcept ? "rgba(255, 215, 0, 0.15)" : "rgba(255, 107, 107, 0.15)");
-                    expandGradient.addColorStop(1, "rgba(0, 0, 0, 0)");
-                    ctx.fillStyle = expandGradient;
-                    ctx.fill();
-                }
+        setTimeout(() => {
+          setHighlightNode(null)
+          setZoomTransition(false)
+        }, 1500)
 
-                // Soft outer glow for selected/hovered nodes
-                if (isHighlighted || isHovered || isSelected) {
-                    ctx.beginPath();
-                    ctx.arc(node.x, node.y, finalRadius + 20, 0, Math.PI * 2);
-                    const outerGlow = ctx.createRadialGradient(
-                        node.x, node.y, 0,
-                        node.x, node.y, finalRadius + 20
-                    );
-                    if (isConcept) {
-                        outerGlow.addColorStop(0, "rgba(255, 223, 0, 0.3)");
-                        outerGlow.addColorStop(0.5, "rgba(255, 215, 0, 0.15)");
-                        outerGlow.addColorStop(1, "rgba(255, 200, 0, 0)");
-                    } else {
-                        outerGlow.addColorStop(0, "rgba(255, 107, 107, 0.3)");
-                        outerGlow.addColorStop(0.5, "rgba(255, 99, 99, 0.15)");
-                        outerGlow.addColorStop(1, "rgba(255, 80, 80, 0)");
-                    }
-                    ctx.fillStyle = outerGlow;
-                    ctx.fill();
-                }
+        useGraphStore.setState({ pendingFocusId: null })
+      }}
+      nodeCanvasObject={(node, ctx, globalScale) => {
+        if (node.x == null || node.y == null) return
 
-                // Elegant outer ring for selected nodes
-                if (isSelected) {
-                    ctx.beginPath();
-                    ctx.arc(node.x, node.y, finalRadius + 5, 0, Math.PI * 2);
-                    ctx.strokeStyle = isConcept ? "rgba(255, 215, 0, 0.7)" : "rgba(255, 107, 107, 0.7)";
-                    ctx.lineWidth = 2;
-                    ctx.stroke();
-                }
+        const gnode = node as GraphNode
+        const label = gnode.title ?? ""
+        const fontSize = Math.max(12 / globalScale, 8)
 
-                // Subtle shadow
-                ctx.shadowColor = isConcept ? "rgba(255, 215, 0, 0.5)" : "rgba(255, 107, 107, 0.5)";
-                ctx.shadowBlur = isSelected || isHovered ? 20 : 12;
+        const isSelected = gnode.id === selectedNodeId
+        const isHighlighted = gnode.id === highlightNodeId
+        const isHovered = gnode.id === hoveredNodeId
+        const isConcept = gnode.type === "concept"
 
-                // Main node circle - clean and professional
-                ctx.beginPath();
-                ctx.arc(node.x, node.y, finalRadius, 0, Math.PI * 2);
+        const baseRadius = isConcept ? 14 : 10
+        const hoverScale = isHovered ? 1.15 : 1
+        const selectScale = isSelected ? 1.2 : 1
+        const pulseScale = isHighlighted ? 1 + Math.sin(animationTime * 4) * 0.08 : 1
+        const finalRadius = baseRadius * hoverScale * selectScale * pulseScale
 
-                if (isConcept) {
-                    if (isSelected || isHovered) {
-                        ctx.fillStyle = "#e5e5e5"; // Light gray
-                    } else {
-                        ctx.fillStyle = "#d4d4d4"; // Gray
-                    }
-                } else {
-                    if (isSelected || isHovered) {
-                        ctx.fillStyle = "#a3a3a3"; // Medium gray
-                    } else {
-                        ctx.fillStyle = "#8b8b8b"; // Dark gray
-                    }
-                }
+        // Subtle outer ring for selected/highlighted
+        if (isSelected || isHighlighted) {
+          ctx.beginPath()
+          ctx.arc(node.x, node.y, finalRadius + 8, 0, Math.PI * 2)
+          ctx.strokeStyle = isConcept
+            ? `rgba(255, 255, 255, ${0.15 + Math.sin(animationTime * 3) * 0.1})`
+            : `rgba(232, 121, 102, ${0.2 + Math.sin(animationTime * 3) * 0.1})`
+          ctx.lineWidth = 1
+          ctx.stroke()
+        }
 
-                ctx.fill();
+        // Subtle glow for hovered/selected
+        if (isHovered || isSelected) {
+          ctx.shadowColor = isConcept ? "rgba(255, 255, 255, 0.4)" : "rgba(232, 121, 102, 0.5)"
+          ctx.shadowBlur = 20
+        } else {
+          ctx.shadowColor = isConcept ? "rgba(255, 255, 255, 0.15)" : "rgba(232, 121, 102, 0.2)"
+          ctx.shadowBlur = 10
+        }
 
-                // Inner subtle highlight
-                ctx.beginPath();
-                ctx.arc(
-                    node.x - finalRadius * 0.3,
-                    node.y - finalRadius * 0.3,
-                    finalRadius * 0.4,
-                    0,
-                    Math.PI * 2
-                );
-                ctx.fillStyle = "rgba(255, 255, 255, 0.3)";
-                ctx.fill();
+        // Main node circle
+        ctx.beginPath()
+        ctx.arc(node.x, node.y, finalRadius, 0, Math.PI * 2)
 
-                ctx.shadowBlur = 0;
+        if (isConcept) {
+          // White/gray gradient for concepts
+          const nodeGradient = ctx.createRadialGradient(
+            node.x - finalRadius * 0.3,
+            node.y - finalRadius * 0.3,
+            0,
+            node.x,
+            node.y,
+            finalRadius,
+          )
+          if (isSelected || isHovered) {
+            nodeGradient.addColorStop(0, "#ffffff")
+            nodeGradient.addColorStop(1, "#d0d0d0")
+          } else {
+            nodeGradient.addColorStop(0, "#e8e8e8")
+            nodeGradient.addColorStop(1, "#a0a0a0")
+          }
+          ctx.fillStyle = nodeGradient
+        } else {
+          // Warm coral gradient for blog posts
+          const nodeGradient = ctx.createRadialGradient(
+            node.x - finalRadius * 0.3,
+            node.y - finalRadius * 0.3,
+            0,
+            node.x,
+            node.y,
+            finalRadius,
+          )
+          if (isSelected || isHovered) {
+            nodeGradient.addColorStop(0, "#f09080")
+            nodeGradient.addColorStop(1, "#e87966")
+          } else {
+            nodeGradient.addColorStop(0, "#e87966")
+            nodeGradient.addColorStop(1, "#c45a48")
+          }
+          ctx.fillStyle = nodeGradient
+        }
 
-                // Clean label with proper centering
-                if (!isDragging || isHovered) {
-                    const padding = 12;
-                    const textMetrics = ctx.measureText(label);
-                    const textWidth = textMetrics.width;
-                    const textHeight = fontSize * 1.4;
+        ctx.fill()
+        ctx.shadowBlur = 0
 
-                    const bgX = node.x - textWidth / 2 - padding / 2;
-                    const bgY = node.y + finalRadius + 18;
-                    const bgWidth = textWidth + padding;
-                    const bgHeight = textHeight + padding;
+        // Inner highlight for 3D effect
+        ctx.beginPath()
+        ctx.arc(node.x - finalRadius * 0.25, node.y - finalRadius * 0.3, finalRadius * 0.3, 0, Math.PI * 2)
+        const highlightGradient = ctx.createRadialGradient(
+          node.x - finalRadius * 0.25,
+          node.y - finalRadius * 0.3,
+          0,
+          node.x - finalRadius * 0.25,
+          node.y - finalRadius * 0.3,
+          finalRadius * 0.3,
+        )
+        highlightGradient.addColorStop(0, "rgba(255, 255, 255, 0.6)")
+        highlightGradient.addColorStop(1, "rgba(255, 255, 255, 0)")
+        ctx.fillStyle = highlightGradient
+        ctx.fill()
 
-                    // Modern card-style background
-                    ctx.fillStyle = "rgba(20, 20, 20, 0.9)";
-                    ctx.beginPath();
-                    ctx.roundRect(bgX, bgY, bgWidth, bgHeight, 8);
-                    ctx.fill();
+        // Label - clean and minimal
+        if (!isDragging || isHovered) {
+          const padding = 10
+          ctx.font = `${isSelected || isHovered ? "500" : "400"} ${fontSize}px "Geist", -apple-system, sans-serif`
+          const textMetrics = ctx.measureText(label)
+          const textWidth = textMetrics.width
+          const textHeight = fontSize * 1.2
 
-                    // Subtle border
-                    const borderColor = isConcept 
-                        ? (isSelected || isHovered ? "rgba(255, 215, 0, 0.6)" : "rgba(255, 215, 0, 0.4)")
-                        : (isSelected || isHovered ? "rgba(255, 107, 107, 0.6)" : "rgba(255, 107, 107, 0.4)");
-                    
-                    ctx.strokeStyle = borderColor;
-                    ctx.lineWidth = 1;
-                    ctx.stroke();
+          const bgX = node.x - textWidth / 2 - padding / 2
+          const bgY = node.y + finalRadius + 12
+          const bgWidth = textWidth + padding
+          const bgHeight = textHeight + padding * 0.8
+          const borderRadius = 4
 
-                    // Centered text
-                    ctx.fillStyle = "#ffffff";
-                    ctx.font = `${isSelected || isHovered ? '600' : '500'} ${fontSize}px -apple-system, BlinkMacSystemFont, 'SF Pro Display', Inter, sans-serif`;
-                    ctx.textAlign = "center";
-                    ctx.textBaseline = "middle";
-                    
-                    ctx.fillText(label, node.x, bgY + bgHeight / 2);
-                }
-            }}
-            linkCanvasObject={(link, ctx) => {
-                const sourceNode = link.source as NodeObject<GraphNode>;
-                const targetNode = link.target as NodeObject<GraphNode>;
-               
-                if (!sourceNode.x || !sourceNode.y || !targetNode.x || !targetNode.y) return;
+          // Minimal label background
+          ctx.fillStyle = isHovered || isSelected ? "rgba(0, 0, 0, 0.85)" : "rgba(0, 0, 0, 0.6)"
+          ctx.beginPath()
+          ctx.roundRect(bgX, bgY, bgWidth, bgHeight, borderRadius)
+          ctx.fill()
 
-                const isSourceSelected = (sourceNode as GraphNode).id === selectedNodeId;
-                const isTargetSelected = (targetNode as GraphNode).id === selectedNodeId;
-                const isSourceHovered = (sourceNode as GraphNode).id === hoveredNodeId;
-                const isTargetHovered = (targetNode as GraphNode).id === hoveredNodeId;
-                
-                const isConnected = isSourceSelected || isTargetSelected || isSourceHovered || isTargetHovered;
+          // Subtle border
+          ctx.strokeStyle = isConcept
+            ? `rgba(255, 255, 255, ${isHovered || isSelected ? 0.3 : 0.1})`
+            : `rgba(232, 121, 102, ${isHovered || isSelected ? 0.4 : 0.15})`
+          ctx.lineWidth = 0.5
+          ctx.stroke()
 
-                ctx.beginPath();
-                ctx.moveTo(sourceNode.x, sourceNode.y);
-                ctx.lineTo(targetNode.x, targetNode.y);
+          // Label text
+          ctx.fillStyle = isHovered || isSelected ? "#ffffff" : "rgba(255, 255, 255, 0.8)"
+          ctx.textAlign = "center"
+          ctx.textBaseline = "middle"
+          ctx.fillText(label, node.x, bgY + bgHeight / 2)
+        }
+      }}
+      linkCanvasObject={(link, ctx) => {
+        const sourceNode = link.source as NodeObject<GraphNode>
+        const targetNode = link.target as NodeObject<GraphNode>
 
-                if (isConnected) {
-                    const gradient = ctx.createLinearGradient(
-                        sourceNode.x, sourceNode.y,
-                        targetNode.x, targetNode.y
-                    );
-                    gradient.addColorStop(0, "rgba(255, 215, 0, 0.7)");
-                    gradient.addColorStop(0.5, "rgba(255, 165, 0, 0.7)");
-                    gradient.addColorStop(1, "rgba(255, 107, 107, 0.7)");
-                    
-                    ctx.strokeStyle = gradient;
-                    ctx.lineWidth = 3.5;
-                    ctx.shadowColor = "rgba(255, 165, 0, 0.5)";
-                    ctx.shadowBlur = 12;
-                    ctx.stroke();
-                } else {
-                    const gradient = ctx.createLinearGradient(
-                        sourceNode.x, sourceNode.y,
-                        targetNode.x, targetNode.y
-                    );
-                    gradient.addColorStop(0, "rgba(255, 215, 0, 0.15)");
-                    gradient.addColorStop(0.5, "rgba(255, 165, 0, 0.1)");
-                    gradient.addColorStop(1, "rgba(255, 107, 107, 0.15)");
-                    
-                    ctx.strokeStyle = gradient;
-                    ctx.lineWidth = 2;
-                    ctx.shadowColor = "rgba(255, 165, 0, 0.2)";
-                    ctx.shadowBlur = 6;
-                }
+        if (!sourceNode.x || !sourceNode.y || !targetNode.x || !targetNode.y) return
 
-                ctx.stroke();
-                ctx.shadowBlur = 0;
-            }}
-            onNodeHover={(node) => {
-                setHoveredNodeId(node ? (node as GraphNode).id : null);
-                
-                const refWithRenderer = fgRef.current as ForceGraphMethods<NodeObject<GraphNode>, LinkObject<GraphNode, GraphLink>> & {
-                    renderer: () => { domElement: HTMLCanvasElement };
-                };
-                if (refWithRenderer.renderer) {
-                    const canvas = refWithRenderer.renderer().domElement as HTMLCanvasElement;
-                    canvas.style.cursor = node ? "pointer" : "grab";
-                }
-            }}
-            onNodeClick={async (node) => {
-                const gnode = node as GraphNode;
-                const id = gnode.id;
-                
-                setSelectedNode(id);
+        const isSourceSelected = (sourceNode as GraphNode).id === selectedNodeId
+        const isTargetSelected = (targetNode as GraphNode).id === selectedNodeId
+        const isSourceHovered = (sourceNode as GraphNode).id === hoveredNodeId
+        const isTargetHovered = (targetNode as GraphNode).id === hoveredNodeId
 
-                if (gnode.type === "blog") {
-                    await new Promise((r) => setTimeout(r, 900));
-                    openBlogModal(id);
-                    return;
-                }
+        const isConnected = isSourceSelected || isTargetSelected || isSourceHovered || isTargetHovered
 
-                if (gnode.type === "concept") {
-                    pushGraphHistory(graphData as GraphData);
-                    
-                    // "Diving in" animation
-                    fgRef.current?.zoom(0.3, 400);
+        ctx.beginPath()
+        ctx.moveTo(sourceNode.x, sourceNode.y)
+        ctx.lineTo(targetNode.x, targetNode.y)
 
-                    try {
-                        const expanded = await fetchConceptGraph(id);
-                        setGraphData(expanded);
-                        // ← pendingFocusId will be set externally (from palette or click), onEngineStop handles zoom
-                    } catch (err) {
-                        console.error("Failed to load concept graph:", err);
-                    }
-                }
-            }}
-        />
-    );
+        if (isConnected) {
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.4)"
+          ctx.lineWidth = 1.5
+          ctx.shadowColor = "rgba(255, 255, 255, 0.3)"
+          ctx.shadowBlur = 8
+        } else {
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.08)"
+          ctx.lineWidth = 1
+        }
+
+        ctx.stroke()
+        ctx.shadowBlur = 0
+      }}
+      onNodeHover={(node) => {
+        setHoveredNodeId(node ? (node as GraphNode).id : null)
+
+        const refWithRenderer = fgRef.current as ForceGraphMethods<
+          NodeObject<GraphNode>,
+          LinkObject<GraphNode, GraphLink>
+        > & {
+          renderer: () => { domElement: HTMLCanvasElement }
+        }
+        if (refWithRenderer.renderer) {
+          const canvas = refWithRenderer.renderer().domElement as HTMLCanvasElement
+          canvas.style.cursor = node ? "pointer" : "grab"
+        }
+      }}
+      onNodeClick={async (node) => {
+        const gnode = node as GraphNode
+        const id = gnode.id
+
+        setSelectedNode(id)
+
+        if (gnode.type === "blog") {
+          await new Promise((r) => setTimeout(r, 600))
+          openBlogModal(id)
+          return
+        }
+
+        if (gnode.type === "concept") {
+          pushGraphHistory(graphData as GraphData)
+
+          fgRef.current?.zoom(0.4, 500)
+
+          try {
+            const expanded = await fetchConceptGraph(id)
+            setGraphData(expanded)
+          } catch (err) {
+            console.error("Failed to load concept graph:", err)
+          }
+        }
+      }}
+    />
+  )
 }
